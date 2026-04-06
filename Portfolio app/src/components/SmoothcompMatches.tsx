@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import sleeping from './sleeping.png'
 import warmup from './newwarm.png'
 import yourUp from './letsgo.png'
@@ -79,11 +79,50 @@ function getMinutesUntil(etaText: string): string {
   return `${hours}h ${mins}m`;
 }
 
+function buildMatchKey(match: MatchDetails): string {
+  return `${match.mat}|${match.number}|${match.athlete1}|${match.athlete2}`;
+}
+
+async function notifyMatchTimeChange(match: MatchDetails, oldEta: string): Promise<void> {
+  if (typeof window === "undefined" || !("Notification" in window)) return;
+  if (Notification.permission !== "granted") return;
+
+  const title = "Match Time Updated";
+  const body = `${match.athlete1} vs ${match.athlete2}: ${oldEta} -> ${match.eta}`;
+
+  const registration = await navigator.serviceWorker.getRegistration();
+  if (registration?.active) {
+    registration.active.postMessage({
+      type: "SHOW_NOTIFICATION",
+      payload: {
+        title,
+        body,
+        url: window.location.href,
+      },
+    });
+    return;
+  }
+
+  // Fallback if service worker is not active yet.
+  new Notification(title, { body });
+}
+
 export default function SmoothcompMatches({ eventId, athleteFilter }: Props) {
   const [matches, setMatches] = useState<MatchDetails[]>([]);
   const [loadingInitial, setLoadingInitial] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(
+    typeof window !== "undefined" && "Notification" in window ? Notification.permission : "default",
+  );
+  const previousEtaByMatch = useRef<Map<string, string>>(new Map());
+  const hasSnapshot = useRef(false);
+
+  const enableNotifications = async () => {
+    if (!("Notification" in window)) return;
+    const permission = await Notification.requestPermission();
+    setNotificationPermission(permission);
+  };
 
   useEffect(() => {
     if (!eventId) return;
@@ -103,10 +142,36 @@ export default function SmoothcompMatches({ eventId, athleteFilter }: Props) {
         const html = await res.text();
         const next = parseMatches(html);
 
+        const q = athleteFilter.trim().toLowerCase();
+        const nextEtaByMatch = new Map<string, string>();
+        const changedTrackedMatches: Array<{ match: MatchDetails; oldEta: string }> = [];
+
+        for (const match of next) {
+          const key = buildMatchKey(match);
+          nextEtaByMatch.set(key, match.eta);
+          const previousEta = previousEtaByMatch.current.get(key);
+          const tracksAthlete =
+            q.length > 0 &&
+            `${match.athlete1} ${match.athlete2}`.toLowerCase().includes(q);
+
+          if (hasSnapshot.current && tracksAthlete && previousEta && previousEta !== match.eta) {
+            changedTrackedMatches.push({ match, oldEta: previousEta });
+          }
+        }
+
         if (!cancelled) {
           setMatches(next);      // table updates in place
           setError("");
         }
+
+        if (!cancelled && changedTrackedMatches.length > 0) {
+          for (const change of changedTrackedMatches.slice(0, 3)) {
+            void notifyMatchTimeChange(change.match, change.oldEta);
+          }
+        }
+
+        previousEtaByMatch.current = nextEtaByMatch;
+        hasSnapshot.current = true;
         } catch (e) {
           if (!cancelled) setError(e instanceof Error ? e.message : "Unknown error");
         } finally {
@@ -156,6 +221,11 @@ export default function SmoothcompMatches({ eventId, athleteFilter }: Props) {
 
   return (
     <div>
+      <button type="button" onClick={enableNotifications}>
+        {notificationPermission === "granted"
+          ? "Notifications Enabled"
+          : "Enable Notifications"}
+      </button>
       <p>Total Matches: {filtered.length}</p>
       <table style={{ borderCollapse: "collapse", width: "100%" }}>
         <thead>
