@@ -90,7 +90,9 @@ async function notifyMatchTimeChange(match: MatchDetails, oldEta: string): Promi
   const title = "Match Time Updated";
   const body = `${match.athlete1} vs ${match.athlete2}: ${oldEta} -> ${match.eta}`;
 
-  const registration = await navigator.serviceWorker.getRegistration();
+  const registration =
+    (await navigator.serviceWorker.getRegistration()) ??
+    (await navigator.serviceWorker.ready.catch(() => undefined));
   if (registration?.active) {
     registration.active.postMessage({
       type: "SHOW_NOTIFICATION",
@@ -122,6 +124,21 @@ export default function SmoothcompMatches({ eventId, athleteFilter }: Props) {
     if (!("Notification" in window)) return;
     const permission = await Notification.requestPermission();
     setNotificationPermission(permission);
+    if (permission === "granted") {
+      const registration =
+        (await navigator.serviceWorker.getRegistration()) ??
+        (await navigator.serviceWorker.ready.catch(() => undefined));
+
+      if (registration) {
+        await registration.showNotification("Notifications Enabled", {
+          body: "You will get alerts when match ETA changes.",
+        });
+      } else {
+        new Notification("Notifications Enabled", {
+          body: "You will get alerts when match ETA changes.",
+        });
+      }
+    }
   };
 
   useEffect(() => {
@@ -151,7 +168,7 @@ export default function SmoothcompMatches({ eventId, athleteFilter }: Props) {
           nextEtaByMatch.set(key, match.eta);
           const previousEta = previousEtaByMatch.current.get(key);
           const tracksAthlete =
-            q.length > 0 &&
+            q.length === 0 ||
             `${match.athlete1} ${match.athlete2}`.toLowerCase().includes(q);
 
           if (hasSnapshot.current && tracksAthlete && previousEta && previousEta !== match.eta) {
@@ -189,7 +206,7 @@ export default function SmoothcompMatches({ eventId, athleteFilter }: Props) {
     cancelled = true;
     window.clearInterval(id);
   };
-}, [eventId]);
+}, [eventId, athleteFilter]);
 
  
 
